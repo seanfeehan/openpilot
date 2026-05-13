@@ -43,8 +43,9 @@ class CarInterface(CarInterfaceBase):
 
       ret.alphaLongitudinalAvailable = not (ret.flags & HyundaiFlags.CANFD_NO_RADAR_DISABLE)
       if lka_steering and Ecu.adas not in [fw.ecu for fw in car_fw]:
-        # this needs to be figured out for cars without an ADAS ECU
-        ret.alphaLongitudinalAvailable = False
+        if not (ret.flags & HyundaiFlags.CANFD_NO_ADAS_FW):
+          # this needs to be figured out for cars without an ADAS ECU
+          ret.alphaLongitudinalAvailable = False
 
       ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN]
 
