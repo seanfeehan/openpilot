@@ -253,4 +253,4 @@ not-subscriptable = "ignore"
 # not-iterable errors are now fixed
 
 [tool.uv]
-python-preference = "only-managed"
+python-preference = "system"
