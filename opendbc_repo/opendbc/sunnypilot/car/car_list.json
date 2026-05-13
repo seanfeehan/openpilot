@@ -910,6 +910,17 @@
     ],
     "package": "All"
   },
+  "Genesis GV70 (3.5T Trim, with HDA II) 2022-23": {
+    "platform": "GENESIS_GV70_1ST_GEN_HDA2",
+    "make": "Genesis",
+    "brand": "hyundai",
+    "model": "GV70 (3.5T Trim, with HDA II)",
+    "year": [
+      "2022",
+      "2023"
+    ],
+    "package": "Highway Driving Assist II"
+  },
   "Genesis GV70 (3.5T Trim, without HDA II) 2022-23": {
     "platform": "GENESIS_GV70_1ST_GEN",
     "make": "Genesis",
