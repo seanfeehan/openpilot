@@ -39,6 +39,10 @@ class CarInterface(CarInterfaceBase):
       # "LFA steering" if camera directly sends LFA to the MDPS
       cam_can = CanBus(None, fingerprint).CAM
       lka_steering = 0x50 in fingerprint[cam_can] or 0x110 in fingerprint[cam_can]
+      # Allow static platform flag to override fingerprint-based detection (e.g. GV70 1st gen with M harness
+      # has LKAS on bus 1, not bus 2, so it can't be auto-detected from cam_can)
+      if not lka_steering and ret.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
+        lka_steering = True
       CAN = CanBus(None, fingerprint, lka_steering)
 
       ret.alphaLongitudinalAvailable = not (ret.flags & HyundaiFlags.CANFD_NO_RADAR_DISABLE)
