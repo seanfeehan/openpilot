@@ -143,6 +143,9 @@ class HyundaiFlags(IntFlag):
 
   MIN_STEER_32_MPH = 2 ** 23
 
+  # This ADAS ECU (0x730) is confirmed present via CAN bus (sends LFA) but does not
+  # respond to UDS firmware queries; skip the firmware-presence check for longitudinal.
+  CANFD_NO_ADAS_FW = 2 ** 27
 
   HAS_LDA_BUTTON = 2 ** 24
 
@@ -604,6 +607,13 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=1950, wheelbase=2.87, steerRatio=14.6),
     flags=HyundaiFlags.CANFD_RADAR_SCC | HyundaiFlags.CANFD_LKA_STEER_MSG,
+  )
+  GENESIS_GV70_1ST_GEN_HDA2 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Genesis GV70 (3.5T Trim, with HDA II) 2022-23", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_s])),
+    ],
+    CarSpecs(mass=1950, wheelbase=2.87, steerRatio=14.6),
+    flags=HyundaiFlags.CANFD_LKA_STEER_MSG | HyundaiFlags.CANFD_NO_ADAS_FW,
   )
   GENESIS_GV70_ELECTRIFIED_1ST_GEN = HyundaiCanFDPlatformConfig(
     [
