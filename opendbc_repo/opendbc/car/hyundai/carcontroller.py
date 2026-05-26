@@ -6,6 +6,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR
+from opendbc.car.carlog import carlog
 from opendbc.car.interfaces import CarControllerBase
 
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
@@ -28,6 +29,7 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 # and triggers the "SCC Conditions Not Met" alert. Delaying the button send lets factory SCC disengage
 # naturally on brake press. We send ~100 ms later if it fails to do so, or if we want to cancel for another reason.
 CANCEL_BUTTON_DELAY_FRAMES = 10
+LONG_DEBUG_CARS = (CAR.GENESIS_GV70_1ST_GEN_HDA2,)
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -200,6 +202,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
+    adrv_msgs = 0
+    fca_msgs = 0
+    spas_msgs = 0
+    acc_control_sent = False
 
     # steering control
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon))
@@ -215,16 +221,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # blinkers
     if lka_steering and self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
-      can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
+      spas = hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker)
+      can_sends.extend(spas)
+      spas_msgs = len(spas)
 
     if self.CP.openpilotLongitudinalControl:
       if lka_steering:
-        can_sends.extend(hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame))
+        adrv = hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame)
+        can_sends.extend(adrv)
+        adrv_msgs = len(adrv)
       else:
-        can_sends.extend(hyundaicanfd.create_fca_warning_light(self.packer, self.CAN, self.frame))
+        fca = hyundaicanfd.create_fca_warning_light(self.packer, self.CAN, self.frame)
+        can_sends.extend(fca)
+        fca_msgs = len(fca)
       if self.frame % 2 == 0:
         can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                          set_speed_in_units, hud_control, self.lead_data, CS.main_cruise_enabled, self.tuning))
+        acc_control_sent = True
         self.accel_last = accel
     else:
       # button presses
@@ -249,5 +262,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             for _ in range(20):
               can_sends.append(hyundaicanfd.create_buttons(self.packer, self.CP, self.CAN, CS.buttons_counter + 1, Buttons.RES_ACCEL))
             self.last_button_frame = self.frame
+
+    if self.CP.carFingerprint in LONG_DEBUG_CARS and self.frame % 20 == 0:
+      carlog.warning(
+        f"hyundai canfd tx ({self.CP.carFingerprint}): long_enabled={self.CP.openpilotLongitudinalControl}, "
+        f"lka_steering={bool(lka_steering)}, adrv_msgs={adrv_msgs}, fca_msgs={fca_msgs}, "
+        f"acc_control_sent={acc_control_sent}, spas_msgs={spas_msgs}, "
+        f"leftBlinkerCmd={CC.leftBlinker}, rightBlinkerCmd={CC.rightBlinker}, total_can_sends={len(can_sends)}"
+      )
 
     return can_sends

@@ -4,6 +4,7 @@ from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlag
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
+from opendbc.car.carlog import carlog
 from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.radar_interface import RadarInterface
@@ -14,6 +15,8 @@ from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP, HyundaiSafetyF
 
 ButtonType = structs.CarState.ButtonEvent.Type
 Ecu = structs.CarParams.Ecu
+
+LONG_DEBUG_CARS = (CAR.GENESIS_GV70_1ST_GEN_HDA2,)
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
@@ -47,9 +50,20 @@ class CarInterface(CarInterfaceBase):
 
       ret.alphaLongitudinalAvailable = not (ret.flags & HyundaiFlags.CANFD_NO_RADAR_DISABLE)
       if lka_steering and Ecu.adas not in [fw.ecu for fw in car_fw]:
-        if not (ret.flags & HyundaiFlags.CANFD_NO_ADAS_FW):
-          # this needs to be figured out for cars without an ADAS ECU
-          ret.alphaLongitudinalAvailable = False
+        # Longitudinal requires disabling the ADAS ECU via UDS. If ADAS ECU FW is not
+        # found (including when CANFD_NO_ADAS_FW is set), disable_ecu cannot succeed —
+        # the ECU does not respond to DiagnosticSessionControl on classic CAN (elm327 mode),
+        # and panda blocks non-tester-present UDS to 0x730 in hyundaiCanfd mode.
+        ret.alphaLongitudinalAvailable = False
+
+      if candidate in LONG_DEBUG_CARS:
+        has_adas_fw = Ecu.adas in [fw.ecu for fw in car_fw]
+        carlog.warning(
+          f"hyundai long gate ({candidate}): alpha_long_req={alpha_long}, lka_steering={lka_steering}, "
+          f"has_adas_fw={has_adas_fw}, canfd_no_adas_fw={bool(ret.flags & HyundaiFlags.CANFD_NO_ADAS_FW)}, "
+          f"canfd_no_radar_disable={bool(ret.flags & HyundaiFlags.CANFD_NO_RADAR_DISABLE)}, "
+          f"alpha_long_available={ret.alphaLongitudinalAvailable}"
+        )
 
       ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN]
 
@@ -143,6 +157,14 @@ class CarInterface(CarInterfaceBase):
     ret.startAccel = 1.0
     ret.longitudinalActuatorDelay = 0.5
 
+    if candidate in LONG_DEBUG_CARS:
+      carlog.warning(
+        f"hyundai long decision ({candidate}): openpilotLongitudinalControl={ret.openpilotLongitudinalControl}, "
+        f"pcmCruise={ret.pcmCruise}, radarUnavailable={ret.radarUnavailable}, "
+        f"camera_scc={bool(ret.flags & HyundaiFlags.CANFD_CAMERA_SCC)}, "
+        f"canfd_enable_blinkers={bool(ret.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS)}"
+      )
+
     if ret.openpilotLongitudinalControl:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value
     if ret.flags & HyundaiFlags.HYBRID:
@@ -222,6 +244,15 @@ class CarInterface(CarInterfaceBase):
 
     ret.intelligentCruiseButtonManagementAvailable = not (stock_cp.flags & HyundaiFlags.CANFD_ALT_BUTTONS)
 
+    if candidate in LONG_DEBUG_CARS:
+      carlog.warning(
+        f"hyundai experimental gate ({candidate}): icbm_available={ret.intelligentCruiseButtonManagementAvailable}, "
+        f"openpilotLongitudinalControl={stock_cp.openpilotLongitudinalControl}, "
+        f"alphaLongitudinalAvailable={stock_cp.alphaLongitudinalAvailable}, "
+        f"canfd_alt_buttons={bool(stock_cp.flags & HyundaiFlags.CANFD_ALT_BUTTONS)}, "
+        f"canfd_enable_blinkers={bool(stock_cp.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS)}"
+      )
+
     return ret
 
   @staticmethod
@@ -237,15 +268,30 @@ class CarInterface(CarInterfaceBase):
     if communication_control is None:
       communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL])
 
-    if CP.openpilotLongitudinalControl and not ((CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CAMERA_SCC)) or
-                                                (CP_SP.flags & HyundaiFlagsSP.ENHANCED_SCC)):
+    long_disable_blocked = ((CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CAMERA_SCC)) or
+                            (CP_SP.flags & HyundaiFlagsSP.ENHANCED_SCC) or
+                            (CP.flags & HyundaiFlags.CANFD_NO_ADAS_FW))
+
+    if CP.carFingerprint in LONG_DEBUG_CARS:
+      carlog.warning(
+        f"hyundai init long ({CP.carFingerprint}): openpilotLongitudinalControl={CP.openpilotLongitudinalControl}, "
+        f"skip_disable_ecu={bool(long_disable_blocked)}, camera_scc={bool(CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CAMERA_SCC))}, "
+        f"enhanced_scc={bool(CP_SP.flags & HyundaiFlagsSP.ENHANCED_SCC)}, "
+        f"canfd_no_adas_fw={bool(CP.flags & HyundaiFlags.CANFD_NO_ADAS_FW)}"
+      )
+
+    if CP.openpilotLongitudinalControl and not long_disable_blocked:
       addr, bus = 0x7d0, CanBus(CP).ECAN if CP.flags & HyundaiFlags.CANFD else 0
       if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG.value:
         addr, bus = 0x730, CanBus(CP).ECAN
+      if CP.carFingerprint in LONG_DEBUG_CARS:
+        carlog.warning(f"hyundai init long ({CP.carFingerprint}): disable_ecu addr={hex(addr)} bus={bus}")
       disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
     # for blinkers
     if CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
+      if CP.carFingerprint in LONG_DEBUG_CARS:
+        carlog.warning(f"hyundai init blinkers ({CP.carFingerprint}): disable_ecu addr=0x7b1 bus={CanBus(CP).ECAN}")
       disable_ecu(can_recv, can_send, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=communication_control)
 
   @staticmethod
